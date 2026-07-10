@@ -83,6 +83,23 @@ async function ensureMainTable() {
   `);
 }
 
+async function ensureAdminUsernameColumn() {
+  try {
+    const [cols] = await promisePool.query("SHOW COLUMNS FROM admin");
+    const names = cols.map((c) => c.Field);
+    if (names.includes("usename") && !names.includes("username")) {
+      await promisePool.query(
+        "ALTER TABLE admin CHANGE usename username VARCHAR(255) NOT NULL"
+      );
+      console.log("Renamed admin.usename column to username");
+    }
+  } catch (error) {
+    if (error.code !== "ER_NO_SUCH_TABLE") {
+      console.error("Admin column check:", error.message);
+    }
+  }
+}
+
 // Login endpoint - Fetches data from database (admin from table admin, main from main, employees from employees)
 // Admin table: id, username, password (plain text). On success redirect to /admin/dashboard.
 // Main table: id, username, password. On success redirect to /main/dashboard.
@@ -4306,12 +4323,29 @@ app.use((err, req, res, next) => {
 
 // Server start
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, '0.0.0.0', () => {
+const DB_NAME = process.env.DB_NAME || "mamuya_dsm_db";
+
+(async () => {
+  try {
+    await promisePool.query("SELECT 1");
+    await ensureAdminUsernameColumn();
+    console.log(`Database connected: ${process.env.DB_USER || "root"}@${process.env.DB_HOST || "localhost"}/${DB_NAME}`);
+  } catch (error) {
+    console.error("\nDatabase connection failed on startup:");
+    console.error(`  User: ${process.env.DB_USER || "root"}`);
+    console.error(`  Host: ${process.env.DB_HOST || "localhost"}`);
+    console.error(`  Database: ${DB_NAME}`);
+    console.error(`  Error: ${error.message}`);
+    console.error("Check backend/server/.env and that MySQL is running in XAMPP.\n");
+  }
+
+  app.listen(PORT, "0.0.0.0", () => {
   console.log('\n========================================');
   console.log(' Backend Server Started Successfully!');
   console.log('========================================');
   console.log(` Server URL: http://localhost:${PORT}`);
   console.log(` API Base: http://localhost:${PORT}/api`);
+  console.log(` Database: ${DB_NAME} (user: ${process.env.DB_USER || "root"})`);
   console.log(`\n Available Endpoints:`);
   console.log(`   GET  /api/test      - Test server connection`);
   console.log(`   GET  /api/test-db   - Test database connection`);
@@ -4325,4 +4359,5 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log(`   DELETE /api/customers/:id - Delete customer`);
   console.log('\n Make sure MySQL is running in XAMPP!');
   console.log('========================================\n');
-});
+  });
+})();

@@ -15,20 +15,14 @@ const {
 
 const app = express();
 
-const isProduction = process.env.NODE_ENV === "production";
-const allowedOrigins = (process.env.CLIENT_URL || (isProduction ? "" : "http://localhost:3000"))
+// Allow local frontends only (npm start, XAMPP Apache on this PC)
+const localOrigins = (process.env.CLIENT_URL || "http://localhost:3000")
   .split(",")
   .map((origin) => origin.trim())
   .filter(Boolean);
 
-if (isProduction && allowedOrigins.length === 0) {
-  console.warn("\nWARNING: CLIENT_URL is empty in production .env.");
-  console.warn("Add your live site URL(s) so the browser can call this API, e.g.:");
-  console.warn("  CLIENT_URL=https://yourdomain.com,http://yourdomain.com\n");
-}
-
 app.use(cors({
-  origin: allowedOrigins.length > 0 ? allowedOrigins : "http://localhost:3000",
+  origin: localOrigins,
   credentials: true
 }));
 app.use(express.json());
@@ -4342,25 +4336,16 @@ const DB_NAME = process.env.DB_NAME || "mamuya_dsm_db";
     console.error(`  Host: ${process.env.DB_HOST || "localhost"}`);
     console.error(`  Database: ${DB_NAME}`);
     console.error(`  Error: ${error.message}`);
-    if (error.code === "ER_ACCESS_DENIED_ERROR" || error.errno === 1045 || error.errno === 1044) {
-      console.error("\nVPS fix (run on the server as root):");
-      console.error("  sudo mysql < backend/server/sql/vps-grant-mtopwa.sql");
-      console.error("  pm2 restart mamuyadsm-backend\n");
-    } else {
-      console.error("Check backend/server/.env and that MySQL is running.\n");
-    }
+    console.error("Check backend/server/.env and that MySQL is running in XAMPP.\n");
   }
 
   app.listen(PORT, "0.0.0.0", () => {
   console.log('\n========================================');
-  console.log(` Backend Server Started (${isProduction ? "production" : "development"})`);
+  console.log(' Backend Server Started Successfully!');
   console.log('========================================');
   console.log(` Server URL: http://localhost:${PORT}`);
   console.log(` API Base: http://localhost:${PORT}/api`);
   console.log(` Database: ${DB_NAME} (user: ${process.env.DB_USER || "root"})`);
-  if (allowedOrigins.length > 0) {
-    console.log(` CORS origins: ${allowedOrigins.join(", ")}`);
-  }
   console.log(`\n Available Endpoints:`);
   console.log(`   GET  /api/test      - Test server connection`);
   console.log(`   GET  /api/test-db   - Test database connection`);
@@ -4372,9 +4357,7 @@ const DB_NAME = process.env.DB_NAME || "mamuya_dsm_db";
   console.log(`   POST /api/customers - Add new customer`);
   console.log(`   PUT  /api/customers/:id - Update customer`);
   console.log(`   DELETE /api/customers/:id - Delete customer`);
-  console.log(isProduction
-    ? '\n Production: pm2 restart mamuyadsm-backend after .env changes'
-    : '\n Local dev: copy .env.local.example to .env for XAMPP (root user)');
+  console.log('\n Make sure MySQL is running in XAMPP!');
   console.log('========================================\n');
   });
 })();

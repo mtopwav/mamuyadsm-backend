@@ -27,6 +27,30 @@ app.use(cors({
 }));
 app.use(express.json());
 
+// API root — health/info for GET /api (VPS proxy checks, browser tests)
+app.get("/api", async (req, res) => {
+  try {
+    await promisePool.query("SELECT 1");
+    res.json({
+      success: true,
+      message: "Mamuya DSM API is running",
+      database: "connected",
+      endpoints: {
+        health: "/api/health",
+        login: "POST /api/login",
+        test: "/api/test"
+      }
+    });
+  } catch (error) {
+    res.status(503).json({
+      success: false,
+      message: "Mamuya DSM API is running but database is unavailable",
+      database: "disconnected",
+      error: process.env.NODE_ENV === "development" ? error.message : undefined
+    });
+  }
+});
+
 // Test endpoint
 app.get("/api/test", (req, res) => {
   res.json({ message: "Hello from Node.js - Server is connected!" });

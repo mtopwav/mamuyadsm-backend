@@ -15,14 +15,14 @@ const {
 
 const app = express();
 
-// Allow local frontends only (npm start, XAMPP Apache on this PC)
-const localOrigins = (process.env.CLIENT_URL || "http://localhost:3000")
+// CORS — origins from CLIENT_URL (production: www.mamuyaautospareparts.co.tz)
+const allowedOrigins = (process.env.CLIENT_URL || "http://localhost:3000")
   .split(",")
   .map((origin) => origin.trim())
   .filter(Boolean);
 
 app.use(cors({
-  origin: localOrigins,
+  origin: allowedOrigins,
   credentials: true
 }));
 app.use(express.json());
@@ -2493,8 +2493,12 @@ app.put("/api/payments/:id/status", async (req, res) => {
     await ensureSparepartsTable();
     await ensureCustomersTable();
     const { id } = req.params;
-    const { status, approver_id, update_loan_status } = req.body;
+    const { status, approver_id, update_loan_status, payment_type } = req.body;
     const shouldUpdateLoanStatus = update_loan_status === true || String(update_loan_status).toLowerCase() === 'true';
+    const paymentTypeVal =
+      payment_type != null && String(payment_type).trim() !== ""
+        ? String(payment_type).trim().slice(0, 50)
+        : null;
 
     if (!['Approved', 'Rejected', 'Pending'].includes(status)) {
       return res.status(400).json({
@@ -2650,9 +2654,11 @@ app.put("/api/payments/:id/status", async (req, res) => {
           `UPDATE payments 
            SET status = ?,
                loan_status = CASE WHEN ? THEN ? ELSE loan_status END,
-               approved_by = ?, approved_at = NOW()
+               approved_by = ?, approved_at = NOW()${paymentTypeVal ? ", payment_type = ?" : ""}
            WHERE id = ?`,
-          [status, shouldUpdateLoanStatus, status, approver_id, id]
+          paymentTypeVal
+            ? [status, shouldUpdateLoanStatus, status, approver_id, paymentTypeVal, id]
+            : [status, shouldUpdateLoanStatus, status, approver_id, id]
         );
 
         if (amountRemain > 0) {
@@ -4370,6 +4376,7 @@ const DB_NAME = process.env.DB_NAME || "mamuya_dsm_db";
   console.log(` Server URL: http://localhost:${PORT}`);
   console.log(` API Base: http://localhost:${PORT}/api`);
   console.log(` Database: ${DB_NAME} (user: ${process.env.DB_USER || "root"})`);
+  console.log(` CORS origins: ${allowedOrigins.join(", ") || "(none)"}`);
   console.log(`\n Available Endpoints:`);
   console.log(`   GET  /api/test      - Test server connection`);
   console.log(`   GET  /api/test-db   - Test database connection`);

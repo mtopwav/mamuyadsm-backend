@@ -2,6 +2,7 @@
 require('dotenv').config({ path: __dirname + '/.env' });
 const express = require("express");
 const cors = require("cors");
+const compression = require("compression");
 const bcrypt = require("bcrypt");
 const promisePool = require("./database");
 const {
@@ -15,6 +16,9 @@ const {
 
 const app = express();
 
+// Faster responses: gzip JSON payloads
+app.use(compression());
+
 // CORS — origins from CLIENT_URL (production: www.mamuyaautospareparts.co.tz)
 const allowedOrigins = (process.env.CLIENT_URL || "http://localhost:3000")
   .split(",")
@@ -25,7 +29,7 @@ app.use(cors({
   origin: allowedOrigins,
   credentials: true
 }));
-app.use(express.json());
+app.use(express.json({ limit: "1mb" }));
 
 // API root — health/info for GET /api (VPS proxy checks, browser tests)
 app.get("/api", async (req, res) => {

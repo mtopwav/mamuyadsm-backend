@@ -997,8 +997,15 @@ function buildUpdateDetails(before, after) {
   return changes.length ? changes.join('; ') : 'Saved with no field changes';
 }
 
-async function recordSparePartChange(before, after, action, details) {
+async function recordSparePartChange(before, after, action, details, quantities) {
   if (!after) return;
+  const quantityBefore = quantities && quantities.before != null
+    ? Number(quantities.before) || 0
+    : (before ? Number(before.quantity_added) || 0 : 0);
+  const quantityAfter = quantities && quantities.after != null
+    ? Number(quantities.after) || 0
+    : quantityBefore;
+  if (quantityAfter < quantityBefore) return;
   try {
     await ensureStockHistoryTable();
     await promisePool.query(
@@ -1013,8 +1020,8 @@ async function recordSparePartChange(before, after, action, details) {
         after.part_number,
         after.category_name || null,
         after.brand_name || null,
-        before ? before.quantity : 0,
-        after.quantity,
+        quantityBefore,
+        quantityAfter,
         after.wholesale_price,
         after.retail_price,
         after.status,
@@ -1603,11 +1610,13 @@ app.post("/api/spareparts", async (req, res) => {
     );
 
     if (spareParts[0]) {
+      const addedQuantity = Number(spareParts[0].quantity_added ?? spareParts[0].quantity) || 0;
       await recordSparePartChange(
         null,
         spareParts[0],
         'added',
-        `Spare part added with quantity ${spareParts[0].quantity}`
+        `Spare part added with quantity ${addedQuantity}`,
+        { before: 0, after: addedQuantity }
       );
     }
 
@@ -1731,12 +1740,15 @@ app.put("/api/spareparts/:id", async (req, res) => {
       );
 
       const afterPart = await fetchSparePartRow(partId);
-      await recordSparePartChange(
-        beforePart,
-        afterPart,
-        'updated',
-        buildUpdateDetails(beforePart, afterPart)
-      );
+      if (quantityToAdd > 0) {
+        await recordSparePartChange(
+          beforePart,
+          afterPart,
+          'updated',
+          `Quantity added: ${quantityToAdd}`,
+          { before: currentQtyAdded, after: newQtyAdded }
+        );
+      }
 
       return res.json({
         success: true,
@@ -1873,12 +1885,16 @@ app.put("/api/spareparts/:id", async (req, res) => {
     );
 
     const afterPart = await fetchSparePartRow(partId);
-    await recordSparePartChange(
-      beforePart,
-      afterPart,
-      'updated',
-      buildUpdateDetails(beforePart, afterPart)
-    );
+    const addedNow = finalQtyAdded - currentQtyAdded;
+    if (addedNow > 0) {
+      await recordSparePartChange(
+        beforePart,
+        afterPart,
+        'updated',
+        `Quantity added: ${addedNow}`,
+        { before: currentQtyAdded, after: finalQtyAdded }
+      );
+    }
 
     return res.json({
       success: true,

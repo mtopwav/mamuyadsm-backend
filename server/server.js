@@ -926,6 +926,31 @@ async function ensureStockHistoryTable() {
       INDEX idx_created_at (created_at)
     )
   `);
+  const [relation] = await promisePool.query(
+    `SELECT CONSTRAINT_NAME
+     FROM information_schema.TABLE_CONSTRAINTS
+     WHERE TABLE_SCHEMA = DATABASE()
+       AND TABLE_NAME = 'stock_history'
+       AND CONSTRAINT_NAME = 'fk_stock_history_sparepart'`
+  );
+  if (relation.length) return;
+  try {
+    await ensureSparepartsTable();
+    await promisePool.query(`
+      DELETE h FROM stock_history h
+      LEFT JOIN spareparts sp ON sp.id = h.sparepart_id
+      WHERE h.sparepart_id IS NOT NULL AND sp.id IS NULL
+    `);
+    await promisePool.query(`
+      ALTER TABLE stock_history
+      ADD CONSTRAINT fk_stock_history_sparepart
+      FOREIGN KEY (sparepart_id) REFERENCES spareparts(id)
+      ON DELETE CASCADE
+      ON UPDATE CASCADE
+    `);
+  } catch (error) {
+    console.error('Failed to relate stock_history to spareparts:', error.message);
+  }
 }
 
 async function fetchSparePartRow(id) {
@@ -2012,9 +2037,9 @@ app.get("/api/stock-history", async (req, res) => {
         h.created_at,
         sp.quantity_added,
         sp.soldout_quantity,
-        sp.quantity AS on_hand_quantity
+        sp.quantity AS sparepart_quantity
        FROM stock_history h
-       LEFT JOIN spareparts sp ON sp.id = h.sparepart_id
+       INNER JOIN spareparts sp ON sp.id = h.sparepart_id
        ORDER BY h.created_at DESC, h.id DESC`
     );
 

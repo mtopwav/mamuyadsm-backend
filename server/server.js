@@ -1013,7 +1013,7 @@ async function recordSparePartChange(before, after, action, details) {
         after.part_number,
         after.category_name || null,
         after.brand_name || null,
-        before ? before.quantity : null,
+        before ? before.quantity : 0,
         after.quantity,
         after.wholesale_price,
         after.retail_price,
@@ -1036,7 +1036,7 @@ async function backfillStockHistory() {
       quantity_before, quantity_after, wholesale_price, retail_price, status, location, details, created_at)
      SELECT
        sp.id, 'added', sp.part_name, sp.part_number, c.name, b.name,
-       NULL, GREATEST(COALESCE(sp.quantity_added, 0), COALESCE(sp.quantity, 0)),
+       0, GREATEST(COALESCE(sp.quantity_added, 0), COALESCE(sp.quantity, 0)),
        sp.wholesale_price, sp.retail_price, sp.status, sp.location,
        CONCAT('Spare part added with quantity ', GREATEST(COALESCE(sp.quantity_added, 0), COALESCE(sp.quantity, 0))),
        sp.created_at

@@ -2038,9 +2038,10 @@ app.get("/api/stock-history", async (req, res) => {
         sp.quantity_added,
         sp.soldout_quantity,
         sp.quantity,
-        sp.quantity AS sparepart_quantity
+        sp.quantity AS sparepart_quantity,
+        CASE WHEN sp.id IS NULL THEN 0 ELSE 1 END AS sparepart_exists
        FROM stock_history h
-       INNER JOIN spareparts sp ON sp.id = h.sparepart_id
+       LEFT JOIN spareparts sp ON sp.id = h.sparepart_id
        ORDER BY h.created_at DESC, h.id DESC`
     );
 

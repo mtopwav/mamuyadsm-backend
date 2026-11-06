@@ -2027,7 +2027,7 @@ app.get("/api/stock-history", async (req, res) => {
         h.part_number,
         h.category_name,
         h.brand_name,
-        h.quantity_before,
+        h.quantity_before AS recorded_quantity_before,
         h.quantity_after,
         h.wholesale_price,
         h.retail_price,
@@ -2037,6 +2037,7 @@ app.get("/api/stock-history", async (req, res) => {
         h.created_at,
         sp.quantity_added,
         sp.soldout_quantity,
+        sp.quantity,
         sp.quantity AS sparepart_quantity
        FROM stock_history h
        INNER JOIN spareparts sp ON sp.id = h.sparepart_id

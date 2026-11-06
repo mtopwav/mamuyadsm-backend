@@ -903,6 +903,171 @@ async function ensureSparepartsTable() {
   }
 }
 
+async function ensureStockHistoryTable() {
+  await promisePool.query(`
+    CREATE TABLE IF NOT EXISTS stock_history (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      sparepart_id INT NULL,
+      action VARCHAR(20) NOT NULL,
+      part_name VARCHAR(255) NOT NULL,
+      part_number VARCHAR(255) NOT NULL,
+      category_name VARCHAR(255) NULL,
+      brand_name VARCHAR(255) NULL,
+      quantity_before INT NULL,
+      quantity_after INT NULL,
+      wholesale_price DECIMAL(12,2) NULL,
+      retail_price DECIMAL(12,2) NULL,
+      status VARCHAR(50) NULL,
+      location VARCHAR(255) NULL,
+      details VARCHAR(1000) NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      INDEX idx_sparepart_id (sparepart_id),
+      INDEX idx_action (action),
+      INDEX idx_created_at (created_at)
+    )
+  `);
+}
+
+async function fetchSparePartRow(id) {
+  const [rows] = await promisePool.query(
+    `SELECT
+      sp.id,
+      sp.part_name,
+      sp.part_number,
+      sp.quantity,
+      sp.quantity_added,
+      sp.wholesale_price,
+      sp.retail_price,
+      sp.status,
+      sp.location,
+      sp.supplier,
+      c.name AS category_name,
+      b.name AS brand_name
+     FROM spareparts sp
+     LEFT JOIN categories c ON sp.category_id = c.id
+     LEFT JOIN brands b ON sp.brand_id = b.id
+     WHERE sp.id = ?`,
+    [id]
+  );
+  return rows[0] || null;
+}
+
+function formatHistoryValue(value) {
+  if (value == null || value === '') return '—';
+  return String(value);
+}
+
+function buildUpdateDetails(before, after) {
+  if (!before || !after) return 'Spare part updated';
+  const changes = [];
+  const textFields = [
+    ['part_name', 'Name'],
+    ['part_number', 'Part number'],
+    ['category_name', 'Category'],
+    ['brand_name', 'Brand'],
+    ['status', 'Status'],
+    ['location', 'Location'],
+    ['supplier', 'Supplier']
+  ];
+  textFields.forEach(([key, label]) => {
+    const previous = formatHistoryValue(before[key]).trim();
+    const next = formatHistoryValue(after[key]).trim();
+    if (previous !== next) {
+      changes.push(`${label}: ${previous} → ${next}`);
+    }
+  });
+
+  const previousQty = parseInt(before.quantity, 10) || 0;
+  const nextQty = parseInt(after.quantity, 10) || 0;
+  if (previousQty !== nextQty) {
+    changes.push(`Quantity: ${previousQty} → ${nextQty}`);
+  }
+
+  [
+    ['wholesale_price', 'Wholesale price'],
+    ['retail_price', 'Retail price']
+  ].forEach(([key, label]) => {
+    const previous = before[key] == null || before[key] === '' ? null : Number(before[key]);
+    const next = after[key] == null || after[key] === '' ? null : Number(after[key]);
+    if (previous !== next) {
+      changes.push(`${label}: ${previous == null ? '—' : previous} → ${next == null ? '—' : next}`);
+    }
+  });
+
+  return changes.length ? changes.join('; ') : 'Saved with no field changes';
+}
+
+async function recordSparePartChange(before, after, action, details) {
+  if (!after) return;
+  try {
+    await ensureStockHistoryTable();
+    await promisePool.query(
+      `INSERT INTO stock_history
+       (sparepart_id, action, part_name, part_number, category_name, brand_name,
+        quantity_before, quantity_after, wholesale_price, retail_price, status, location, details)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        after.id,
+        action,
+        after.part_name,
+        after.part_number,
+        after.category_name || null,
+        after.brand_name || null,
+        before ? before.quantity : null,
+        after.quantity,
+        after.wholesale_price,
+        after.retail_price,
+        after.status,
+        after.location,
+        details
+      ]
+    );
+  } catch (error) {
+    console.error('Failed to record stock history:', error);
+  }
+}
+
+async function backfillStockHistory() {
+  await ensureSparepartsTable();
+  await ensureStockHistoryTable();
+  await promisePool.query(
+    `INSERT INTO stock_history
+     (sparepart_id, action, part_name, part_number, category_name, brand_name,
+      quantity_before, quantity_after, wholesale_price, retail_price, status, location, details, created_at)
+     SELECT
+       sp.id, 'added', sp.part_name, sp.part_number, c.name, b.name,
+       NULL, GREATEST(COALESCE(sp.quantity_added, 0), COALESCE(sp.quantity, 0)),
+       sp.wholesale_price, sp.retail_price, sp.status, sp.location,
+       CONCAT('Spare part added with quantity ', GREATEST(COALESCE(sp.quantity_added, 0), COALESCE(sp.quantity, 0))),
+       sp.created_at
+     FROM spareparts sp
+     LEFT JOIN categories c ON sp.category_id = c.id
+     LEFT JOIN brands b ON sp.brand_id = b.id
+     WHERE NOT EXISTS (
+       SELECT 1 FROM stock_history h
+       WHERE h.sparepart_id = sp.id AND h.action = 'added'
+     )`
+  );
+  await promisePool.query(
+    `INSERT INTO stock_history
+     (sparepart_id, action, part_name, part_number, category_name, brand_name,
+      quantity_before, quantity_after, wholesale_price, retail_price, status, location, details, created_at)
+     SELECT
+       sp.id, 'updated', sp.part_name, sp.part_number, c.name, b.name,
+       NULL, sp.quantity, sp.wholesale_price, sp.retail_price, sp.status, sp.location,
+       'Spare part updated',
+       sp.updated_at
+     FROM spareparts sp
+     LEFT JOIN categories c ON sp.category_id = c.id
+     LEFT JOIN brands b ON sp.brand_id = b.id
+     WHERE TIMESTAMPDIFF(SECOND, sp.created_at, sp.updated_at) > 1
+       AND NOT EXISTS (
+         SELECT 1 FROM stock_history h
+         WHERE h.sparepart_id = sp.id AND h.action = 'updated'
+       )`
+  );
+}
+
 // Categories endpoints
 // Get all categories
 app.get("/api/categories", async (req, res) => {
@@ -1437,6 +1602,15 @@ app.post("/api/spareparts", async (req, res) => {
       [result.insertId]
     );
 
+    if (spareParts[0]) {
+      await recordSparePartChange(
+        null,
+        spareParts[0],
+        'added',
+        `Spare part added with quantity ${spareParts[0].quantity}`
+      );
+    }
+
     res.status(201).json({
       success: true,
       message: "Spare part added successfully",
@@ -1497,20 +1671,17 @@ app.put("/api/spareparts/:id", async (req, res) => {
 
     if (isQuantityOnlyUpdate) {
       // Get current spare part
-      const [currentParts] = await promisePool.query(
-        "SELECT quantity, quantity_added, retail_price FROM spareparts WHERE id = ?",
-        [partId]
-      );
+      const beforePart = await fetchSparePartRow(partId);
 
-      if (currentParts.length === 0) {
+      if (!beforePart) {
         return res.status(404).json({
           success: false,
           message: "Spare part not found"
         });
       }
 
-      const currentQuantity = parseInt(currentParts[0].quantity) || 0;
-      const currentQtyAdded = parseInt(currentParts[0].quantity_added) || 0;
+      const currentQuantity = parseInt(beforePart.quantity) || 0;
+      const currentQtyAdded = parseInt(beforePart.quantity_added) || 0;
       const quantityToAdd = parseInt(quantity_to_add) || 0;
       const newQuantity = currentQuantity + quantityToAdd;
       const newQtyAdded = currentQtyAdded + quantityToAdd;
@@ -1557,6 +1728,14 @@ app.put("/api/spareparts/:id", async (req, res) => {
          LEFT JOIN brands b ON sp.brand_id = b.id
          WHERE sp.id = ?`,
         [partId]
+      );
+
+      const afterPart = await fetchSparePartRow(partId);
+      await recordSparePartChange(
+        beforePart,
+        afterPart,
+        'updated',
+        buildUpdateDetails(beforePart, afterPart)
       );
 
       return res.json({
@@ -1620,20 +1799,17 @@ app.put("/api/spareparts/:id", async (req, res) => {
         ? String(supplier).trim()
         : 'Mamuya Auto Spare Parts';
 
-    const [currentParts] = await promisePool.query(
-      "SELECT quantity, quantity_added FROM spareparts WHERE id = ?",
-      [partId]
-    );
+    const beforePart = await fetchSparePartRow(partId);
 
-    if (currentParts.length === 0) {
+    if (!beforePart) {
       return res.status(404).json({
         success: false,
         message: "Spare part not found"
       });
     }
 
-    const currentQuantity = parseInt(currentParts[0].quantity, 10) || 0;
-    const currentQtyAdded = parseInt(currentParts[0].quantity_added, 10) || 0;
+    const currentQuantity = parseInt(beforePart.quantity, 10) || 0;
+    const currentQtyAdded = parseInt(beforePart.quantity_added, 10) || 0;
     let finalQuantity = qtyVal;
     let finalQtyAdded = currentQtyAdded;
 
@@ -1696,6 +1872,14 @@ app.put("/api/spareparts/:id", async (req, res) => {
       [partId]
     );
 
+    const afterPart = await fetchSparePartRow(partId);
+    await recordSparePartChange(
+      beforePart,
+      afterPart,
+      'updated',
+      buildUpdateDetails(beforePart, afterPart)
+    );
+
     return res.json({
       success: true,
       message: "Spare part updated successfully",
@@ -1745,6 +1929,44 @@ app.delete("/api/spareparts/:id", async (req, res) => {
     res.status(500).json({
       success: false,
       message: "An error occurred while deleting spare part",
+      error: process.env.NODE_ENV === "development" ? error.message : undefined
+    });
+  }
+});
+
+app.get("/api/stock-history", async (req, res) => {
+  try {
+    await backfillStockHistory();
+    const [history] = await promisePool.query(
+      `SELECT
+        id,
+        sparepart_id,
+        action,
+        part_name,
+        part_number,
+        category_name,
+        brand_name,
+        quantity_before,
+        quantity_after,
+        wholesale_price,
+        retail_price,
+        status,
+        location,
+        details,
+        created_at
+       FROM stock_history
+       ORDER BY created_at DESC, id DESC`
+    );
+
+    res.json({
+      success: true,
+      history: history || []
+    });
+  } catch (error) {
+    console.error("Get stock history error:", error);
+    res.status(500).json({
+      success: false,
+      message: "An error occurred while fetching stock history",
       error: process.env.NODE_ENV === "development" ? error.message : undefined
     });
   }

@@ -1001,7 +1001,7 @@ async function recordSparePartChange(before, after, action, details, quantities)
   if (!after) return;
   const quantityBefore = quantities && quantities.before != null
     ? Number(quantities.before) || 0
-    : (before ? Number(before.quantity_added) || 0 : 0);
+    : (before ? Number(before.quantity) || 0 : 0);
   const quantityAfter = quantities && quantities.after != null
     ? Number(quantities.after) || 0
     : quantityBefore;
@@ -1095,6 +1095,23 @@ async function backfillStockHistory() {
          ) edits
          WHERE edits.sparepart_id = h.sparepart_id
        )`
+  );
+  await promisePool.query(
+    `UPDATE stock_history h
+     INNER JOIN spareparts sp ON sp.id = h.sparepart_id
+     INNER JOIN (
+       SELECT sparepart_id, MAX(id) AS id
+       FROM stock_history
+       WHERE action = 'updated'
+       GROUP BY sparepart_id
+     ) latest ON latest.id = h.id
+     SET h.quantity_before = GREATEST(0, sp.quantity - (h.quantity_after - h.quantity_before)),
+         h.quantity_after = sp.quantity
+     WHERE h.details LIKE 'Quantity added:%'
+       AND h.quantity_before IS NOT NULL
+       AND h.quantity_after IS NOT NULL
+       AND h.quantity_after >= h.quantity_before
+       AND h.quantity_after = sp.quantity_added`
   );
 }
 
@@ -1633,7 +1650,7 @@ app.post("/api/spareparts", async (req, res) => {
     );
 
     if (spareParts[0]) {
-      const addedQuantity = Number(spareParts[0].quantity_added ?? spareParts[0].quantity) || 0;
+      const addedQuantity = Number(spareParts[0].quantity) || 0;
       await recordSparePartChange(
         null,
         spareParts[0],
@@ -1769,7 +1786,7 @@ app.put("/api/spareparts/:id", async (req, res) => {
           afterPart,
           'updated',
           `Quantity added: ${quantityToAdd}`,
-          { before: currentQtyAdded, after: newQtyAdded }
+          { before: currentQuantity, after: newQuantity }
         );
       }
 
@@ -1915,7 +1932,7 @@ app.put("/api/spareparts/:id", async (req, res) => {
         afterPart,
         'updated',
         `Quantity added: ${addedNow}`,
-        { before: currentQtyAdded, after: finalQtyAdded }
+        { before: currentQuantity, after: finalQuantity }
       );
     }
 

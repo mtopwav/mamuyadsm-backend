@@ -1043,9 +1043,19 @@ async function backfillStockHistory() {
       quantity_before, quantity_after, wholesale_price, retail_price, status, location, details, created_at)
      SELECT
        sp.id, 'added', sp.part_name, sp.part_number, c.name, b.name,
-       0, GREATEST(COALESCE(sp.quantity_added, 0), COALESCE(sp.quantity, 0)),
+       0,
+       CASE
+         WHEN COALESCE(sp.quantity_added, 0) > 0 THEN sp.quantity_added
+         ELSE COALESCE(sp.quantity, 0) + COALESCE(sp.soldout_quantity, 0)
+       END,
        sp.wholesale_price, sp.retail_price, sp.status, sp.location,
-       CONCAT('Spare part added with quantity ', GREATEST(COALESCE(sp.quantity_added, 0), COALESCE(sp.quantity, 0))),
+       CONCAT(
+         'Spare part added with quantity ',
+         CASE
+           WHEN COALESCE(sp.quantity_added, 0) > 0 THEN sp.quantity_added
+           ELSE COALESCE(sp.quantity, 0) + COALESCE(sp.soldout_quantity, 0)
+         END
+       ),
        sp.created_at
      FROM spareparts sp
      LEFT JOIN categories c ON sp.category_id = c.id
@@ -1056,21 +1066,34 @@ async function backfillStockHistory() {
      )`
   );
   await promisePool.query(
-    `INSERT INTO stock_history
-     (sparepart_id, action, part_name, part_number, category_name, brand_name,
-      quantity_before, quantity_after, wholesale_price, retail_price, status, location, details, created_at)
-     SELECT
-       sp.id, 'updated', sp.part_name, sp.part_number, c.name, b.name,
-       NULL, sp.quantity, sp.wholesale_price, sp.retail_price, sp.status, sp.location,
-       'Spare part updated',
-       sp.updated_at
-     FROM spareparts sp
-     LEFT JOIN categories c ON sp.category_id = c.id
-     LEFT JOIN brands b ON sp.brand_id = b.id
-     WHERE TIMESTAMPDIFF(SECOND, sp.created_at, sp.updated_at) > 1
+    `DELETE FROM stock_history
+     WHERE action = 'updated' AND details = 'Spare part updated'`
+  );
+  await promisePool.query(
+    `UPDATE stock_history h
+     INNER JOIN spareparts sp ON sp.id = h.sparepart_id
+     SET h.quantity_before = 0,
+         h.quantity_after = CASE
+           WHEN COALESCE(sp.quantity_added, 0) > 0 THEN sp.quantity_added
+           ELSE COALESCE(sp.quantity, 0) + COALESCE(sp.soldout_quantity, 0)
+         END,
+         h.details = CONCAT(
+           'Spare part added with quantity ',
+           CASE
+             WHEN COALESCE(sp.quantity_added, 0) > 0 THEN sp.quantity_added
+             ELSE COALESCE(sp.quantity, 0) + COALESCE(sp.soldout_quantity, 0)
+           END
+         )
+     WHERE h.action = 'added'
+       AND COALESCE(sp.soldout_quantity, 0) > 0
+       AND h.quantity_after = sp.quantity
        AND NOT EXISTS (
-         SELECT 1 FROM stock_history h
-         WHERE h.sparepart_id = sp.id AND h.action = 'updated'
+         SELECT 1 FROM (
+           SELECT sparepart_id
+           FROM stock_history
+           WHERE action = 'updated' AND details LIKE 'Quantity added:%'
+         ) edits
+         WHERE edits.sparepart_id = h.sparepart_id
        )`
   );
 }
@@ -1955,23 +1978,27 @@ app.get("/api/stock-history", async (req, res) => {
     await backfillStockHistory();
     const [history] = await promisePool.query(
       `SELECT
-        id,
-        sparepart_id,
-        action,
-        part_name,
-        part_number,
-        category_name,
-        brand_name,
-        quantity_before,
-        quantity_after,
-        wholesale_price,
-        retail_price,
-        status,
-        location,
-        details,
-        created_at
-       FROM stock_history
-       ORDER BY created_at DESC, id DESC`
+        h.id,
+        h.sparepart_id,
+        h.action,
+        h.part_name,
+        h.part_number,
+        h.category_name,
+        h.brand_name,
+        h.quantity_before,
+        h.quantity_after,
+        h.wholesale_price,
+        h.retail_price,
+        h.status,
+        h.location,
+        h.details,
+        h.created_at,
+        sp.quantity_added,
+        sp.soldout_quantity,
+        sp.quantity AS on_hand_quantity
+       FROM stock_history h
+       LEFT JOIN spareparts sp ON sp.id = h.sparepart_id
+       ORDER BY h.created_at DESC, h.id DESC`
     );
 
     res.json({
